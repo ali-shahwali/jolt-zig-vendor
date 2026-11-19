@@ -19,6 +19,9 @@
 #include <Jolt/Physics/Collision/Shape/MeshShape.h>
 #include <Jolt/Physics/Collision/Shape/HeightFieldShape.h>
 #include <Jolt/Physics/Character/CharacterVirtual.h>
+#include <Jolt/Physics/Collision/NarrowPhaseQuery.h>
+#include <Jolt/Physics/Collision/TransformedShape.h>
+#include <Jolt/Physics/Collision/CollisionCollectorImpl.h>
 
 #include <cstring>
 
@@ -110,6 +113,38 @@ static_assert(sizeof(JPH::SubShapeID) == sizeof(JPH_SubShapeID), "SubShapeID is 
 JPH::ContactConstraintManager::CombineFunction combineFunction(JPHX_CombineFn combine) {
 	return reinterpret_cast<JPH::ContactConstraintManager::CombineFunction>(combine);
 }
+
+// Passes object layers below 32 whose bit is set in the mask.
+class LayerMaskFilter final : public JPH::ObjectLayerFilter {
+public:
+	explicit LayerMaskFilter(uint32_t mask) : mask(mask) {}
+
+	bool ShouldCollide(JPH::ObjectLayer layer) const override {
+		if (layer >= 32) return false;
+		return (mask >> layer) & 1u;
+	}
+
+private:
+	uint32_t mask;
+};
+
+// Passes bodies whose motion type has its bit (1 << EMotionType) set in the mask.
+class MotionMaskFilter final : public JPH::BodyFilter {
+public:
+	explicit MotionMaskFilter(uint32_t mask) : mask(mask) {}
+
+	bool ShouldCollideLocked(const JPH::Body& body) const override {
+		const uint32_t motion = static_cast<uint32_t>(body.GetMotionType());
+		return (mask >> motion) & 1u;
+	}
+
+private:
+	uint32_t mask;
+};
+
+static_assert(static_cast<int>(JPH::EMotionType::Static) == JPH_MotionType_Static, "motion bits match joltc");
+static_assert(static_cast<int>(JPH::EMotionType::Kinematic) == JPH_MotionType_Kinematic, "motion bits match joltc");
+static_assert(static_cast<int>(JPH::EMotionType::Dynamic) == JPH_MotionType_Dynamic, "motion bits match joltc");
 
 } // namespace
 
@@ -247,6 +282,45 @@ uint32_t JPHX_Shape_GetTriangles(const JPH_Shape* shape, const JPH_RVec3* positi
 				outVertices[count * 9 + v * 3 + 2] = vertices[t * 3 + v].z;
 			}
 			count += 1;
+		}
+	}
+	return count;
+}
+
+uint32_t JPHX_PhysicsSystem_GetTriangles(JPH_PhysicsSystem* physicsSystem, const JPH_AABox* box, uint32_t layerMask, uint32_t motionMask, float* outVertices, uint32_t* outSurfaces, uint32_t triangleMax, bool* outTruncated) {
+	*outTruncated = false;
+	const JPH::AABox bounds(JPH::Vec3(box->min.x, box->min.y, box->min.z), JPH::Vec3(box->max.x, box->max.y, box->max.z));
+	const LayerMaskFilter layerFilter(layerMask);
+	const MotionMaskFilter motionFilter(motionMask);
+	// Jolt walks compounds and decorated shapes, and gives each leaf with its world transform.
+	JPH::AllHitCollisionCollector<JPH::TransformedShapeCollector> leaves;
+	system(physicsSystem)->GetNarrowPhaseQuery().CollectTransformedShapes(bounds, leaves, {}, layerFilter, motionFilter);
+
+	uint32_t count = 0;
+	constexpr int batch = JPH::Shape::cGetTrianglesMinTrianglesRequested;
+	JPH::Float3 vertices[batch * 3];
+	const JPH::PhysicsMaterial* materials[batch];
+	for (const JPH::TransformedShape& leaf : leaves.mHits) {
+		JPH::Shape::GetTrianglesContext context;
+		leaf.GetTrianglesStart(context, bounds, JPH::RVec3::sZero());
+		// Each call returns at least one triangle until the leaf has none left.
+		for (uint32_t round = 0; round <= triangleMax; ++round) {
+			const int n = leaf.GetTrianglesNext(context, batch, vertices, materials);
+			if (n <= 0) break;
+			for (int t = 0; t < n; ++t) {
+				if (count == triangleMax) {
+					*outTruncated = true;
+					return count;
+				}
+				for (int v = 0; v < 3; ++v) {
+					outVertices[count * 9 + v * 3 + 0] = vertices[t * 3 + v].x;
+					outVertices[count * 9 + v * 3 + 1] = vertices[t * 3 + v].y;
+					outVertices[count * 9 + v * 3 + 2] = vertices[t * 3 + v].z;
+				}
+				const ExtMaterial* m = extMaterial(materials[t]);
+				outSurfaces[count] = m != nullptr ? m->index : 0;
+				count += 1;
+			}
 		}
 	}
 	return count;

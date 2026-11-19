@@ -52,6 +52,14 @@ JPH_CAPI JPH_BodyID JPHX_BodyInterface_CreateBody(JPH_BodyInterface* bodyInterfa
  * at most `triangleMax`. */
 JPH_CAPI uint32_t JPHX_Shape_GetTriangles(const JPH_Shape* shape, const JPH_RVec3* position, const JPH_Quat* rotation, const JPH_Vec3* scale, float* outVertices, uint32_t triangleMax);
 
+/* The world-space triangles of the leaf shapes of the bodies whose bounds touch `box`. Takes only bodies on
+ * an object layer below 32 whose bit is set in `layerMask`, and with a motion type whose bit (1 << JPH_MotionType)
+ * is set in `motionMask`. Compounds, scaled and offset shapes give their leaves. Writes 9 floats per triangle to
+ * `outVertices` and the triangle's surface index (JPHX_PhysicsMaterial_GetIndex, 0 for none) to `outSurfaces`.
+ * Returns the count written, at most `triangleMax`. Sets `*outTruncated` when more triangles remain.
+ * Triangles of a body that only touches `box` can lie outside it. */
+JPH_CAPI uint32_t JPHX_PhysicsSystem_GetTriangles(JPH_PhysicsSystem* system, const JPH_AABox* box, uint32_t layerMask, uint32_t motionMask, float* outVertices, uint32_t* outSurfaces, uint32_t triangleMax, bool* outTruncated);
+
 /* Sets the convex radius-independent motion quality. 0 discrete, 1 linear cast (continuous). */
 JPH_CAPI void JPHX_BodyCreationSettings_SetCcd(JPH_BodyCreationSettings* settings, bool ccd);
 JPH_CAPI void JPHX_BodyCreationSettings_SetMass(JPH_BodyCreationSettings* settings, float mass);
